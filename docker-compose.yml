@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: finguard-postgres
+    environment:
+      POSTGRES_DB: finguard_db
+      POSTGRES_USER: finguard_user
+      POSTGRES_PASSWORD: finguard_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U finguard_user -d finguard_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - finguard-network
+
+  ml-service:
+    build:
+      context: ./ml-service
+      dockerfile: Dockerfile
+    container_name: finguard-ml-service
+    environment:
+      - DATABASE_URL=postgresql://finguard_user:finguard_pass@postgres:5432/finguard_db
+      - MODEL_PATH=/app/models
+      - LOG_LEVEL=INFO
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./ml-service/models:/app/models
+      - ml_service_logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - finguard-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: finguard-backend
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/finguard_db
+      - SPRING_DATASOURCE_USERNAME=finguard_user
+      - SPRING_DATASOURCE_PASSWORD=finguard_pass
+      - JWT_SECRET=your-256-bit-secret-key-for-jwt-signing-finguard-ai-2024
+      - JWT_EXPIRATION=86400000
+      - ML_SERVICE_URL=http://ml-service:8000
+      - CORS_ALLOWED_ORIGINS=http://localhost:5173,http://frontend:5173
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ml-service:
+        condition: service_healthy
+    networks:
+      - finguard-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: finguard-frontend
+    environment:
+      - VITE_API_URL=http://localhost:8080
+      - VITE_ML_SERVICE_URL=http://localhost:8000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    networks:
+      - finguard-network
+
+volumes:
+  postgres_data:
+  ml_service_logs:
+
+networks:
+  finguard-network:
+    driver: bridge
